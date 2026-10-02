@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import com.sender.backend.realtime.RealtimePublisher;
 import java.util.List;
 
 import static com.sender.backend.friendship.FriendshipDtos.*;
@@ -13,10 +14,12 @@ import static com.sender.backend.friendship.FriendshipDtos.*;
 public class FriendshipService {
     private final FriendshipRepository friendships;
     private final UserRepository users;
+    private final RealtimePublisher realtime;
 
-    public FriendshipService(FriendshipRepository friendships, UserRepository users) {
+    public FriendshipService(FriendshipRepository friendships, UserRepository users, RealtimePublisher realtime) {
         this.friendships = friendships;
         this.users = users;
+        this.realtime = realtime;
     }
 
     @Transactional(readOnly = true)
@@ -42,7 +45,10 @@ public class FriendshipService {
             Friendship current = existing.getFirst();
             throw new ResponseStatusException(HttpStatus.CONFLICT, "A friendship already exists");
         }
-        return FriendshipResponse.from(friendships.save(new Friendship(requester, addressee)));
+        Friendship friendship = friendships.save(new Friendship(requester, addressee));
+        FriendshipResponse response = FriendshipResponse.from(friendship);
+        realtime.publishAfterCommit(addresseeId, "FRIEND_REQUEST_CREATED", new FriendRequestCreatedPayload(response));
+        return response;
     }
 
     @Transactional
@@ -54,10 +60,21 @@ public class FriendshipService {
         }
         if (decision == Decision.ACCEPT) friendship.accept();
         else friendship.decline();
-        return FriendshipResponse.from(friendship);
+        FriendshipResponse response = FriendshipResponse.from(friendship);
+        if (decision == Decision.ACCEPT) {
+            realtime.publishAfterCommit(
+                    friendship.getRequester().getId(),
+                    "FRIENDSHIP_UPDATED",
+                    new FriendshipUpdatedPayload(response)
+            );
+        }
+        return response;
     }
 
     private User findUser(Integer id) {
         return users.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
     }
+
+    private record FriendRequestCreatedPayload(FriendshipResponse friendship) {}
+    private record FriendshipUpdatedPayload(FriendshipResponse friendship) {}
 }

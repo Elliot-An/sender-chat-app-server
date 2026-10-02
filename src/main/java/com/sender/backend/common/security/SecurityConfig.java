@@ -18,6 +18,7 @@ import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.annotation.Value;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Arrays;
 
 @Configuration
 public class SecurityConfig {
@@ -50,6 +51,7 @@ public class SecurityConfig {
 								"/api-docs/**",
 								"/v3/api-docs",
 								"/v3/api-docs/**",
+								"/ws",
 								"/**/favicon.ico",
 								"/error").permitAll()
 						.anyRequest().authenticated())
@@ -61,7 +63,11 @@ public class SecurityConfig {
 	CorsConfigurationSource corsConfigurationSource(
 			@Value("${app.cors.allowed-origin:http://localhost:3000}") String allowedOrigin) {
 		CorsConfiguration configuration = new CorsConfiguration();
-		configuration.setAllowedOrigins(List.of(allowedOrigin));
+		configuration.setAllowedOrigins(Arrays.stream(allowedOrigin.split(","))
+				.map(String::trim)
+				.map(origin -> origin.endsWith("/") ? origin.substring(0, origin.length() - 1) : origin)
+				.filter(origin -> !origin.isBlank())
+				.toList());
 		configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
 		configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
 		configuration.setExposedHeaders(List.of("Set-Cookie"));
