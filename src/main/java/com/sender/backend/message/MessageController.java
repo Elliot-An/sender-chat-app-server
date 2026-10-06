@@ -42,6 +42,18 @@ public class MessageController {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.send(userId(jwt), conversationId, request));
     }
 
+    @GetMapping("/search")
+    @Operation(summary = "Search conversation messages", description = "Returns ranked, cursor-paginated messages scoped to the conversation.")
+    @ApiResponse(responseCode = "200", description = "Search results returned")
+    @ApiResponse(responseCode = "400", description = "Invalid query or cursor")
+    @ApiResponse(responseCode = "403", description = "Authenticated user is not a member")
+    public SearchPage search(@AuthenticationPrincipal Jwt jwt, @PathVariable Integer conversationId,
+                                            @RequestParam String q,
+                                            @RequestParam(required = false) String cursor,
+                                            @RequestParam(defaultValue = "30") int limit) {
+        return service.search(userId(jwt), conversationId, q, cursor, limit);
+    }
+
     private Integer userId(Jwt jwt) {
         return Integer.valueOf(jwt.getSubject());
     }

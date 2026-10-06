@@ -52,4 +52,8 @@ public final class MessageDtos {
     public record MessageCreatedPayload(MessageResponse message) {}
 
     public record Page(List<MessageResponse> items, String nextCursor, boolean hasMore) {}
+
+    public record SearchResponse(MessageResponse message, double rank, String snippet) {}
+
+    public record SearchPage(List<SearchResponse> items, String nextCursor, boolean hasMore) {}
 }

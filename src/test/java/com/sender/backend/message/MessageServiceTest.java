@@ -63,6 +63,34 @@ class MessageServiceTest {
         verify(messages, never()).save(any());
     }
 
+    @Test
+    void searchRejectsQueriesOutsideTheSupportedLength() throws Exception {
+        Conversation conversation = Conversation.direct("1:2");
+        setId(conversation, 9);
+        when(members.existsByConversationIdAndUserId(9, 1)).thenReturn(true);
+        when(conversations.findById(9)).thenReturn(Optional.of(conversation));
+
+        ResponseStatusException exception = assertThrows(ResponseStatusException.class,
+                () -> new MessageService(messages, conversations, members, users, realtime)
+                        .search(1, 9, "a", null, 30));
+
+        assertEquals(400, exception.getStatusCode().value());
+        verify(messages, never()).search(anyInt(), anyString(), any());
+    }
+
+    @Test
+    void searchRejectsNonMembersBeforeQueryingMessages() throws Exception {
+        when(members.existsByConversationIdAndUserId(9, 1)).thenReturn(false);
+        when(conversations.existsById(9)).thenReturn(true);
+
+        ResponseStatusException exception = assertThrows(ResponseStatusException.class,
+                () -> new MessageService(messages, conversations, members, users, realtime)
+                        .search(1, 9, "hello", null, 30));
+
+        assertEquals(403, exception.getStatusCode().value());
+        verify(messages, never()).search(anyInt(), anyString(), any());
+    }
+
     private static void setId(Object target, Object value) throws Exception {
         Field field = target instanceof Message ? Message.class.getDeclaredField("id")
                 : target instanceof Conversation ? Conversation.class.getDeclaredField("id")

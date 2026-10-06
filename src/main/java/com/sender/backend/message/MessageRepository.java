@@ -7,6 +7,13 @@ import java.time.Instant;
 import java.util.*;
 
 public interface MessageRepository extends JpaRepository<Message, Long> {
+    interface SearchRow {
+        Long getId();
+        Instant getCreatedAt();
+        Double getRank();
+        String getSnippet();
+    }
+
     Optional<Message> findByConversationIdAndSenderIdAndClientMessageId(Integer conversationId, Integer senderId, UUID clientMessageId);
     Optional<Message> findTopByConversationIdOrderByCreatedAtDescIdDesc(Integer conversationId);
 
@@ -51,4 +58,47 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
                           @Param("userId") Integer userId,
                           @Param("readAt") Instant readAt,
                           @Param("readId") Long readId);
+
+    @Query(value = """
+        select m.id as id, m.created_at as createdAt,
+               ts_rank_cd(to_tsvector('simple', immutable_unaccent(m.body)),
+                          plainto_tsquery('simple', immutable_unaccent(:query))) as rank,
+               substring(m.body from 1 for 240) as snippet
+        from messages m
+        where m.conversation_id = :conversationId
+          and to_tsvector('simple', immutable_unaccent(m.body))
+              @@ plainto_tsquery('simple', immutable_unaccent(:query))
+        order by rank desc, m.created_at desc, m.id desc
+        """, nativeQuery = true)
+    List<SearchRow> search(@Param("conversationId") Integer conversationId,
+                           @Param("query") String query,
+                           Pageable pageable);
+
+    @Query(value = """
+        select m.id as id, m.created_at as createdAt,
+               ts_rank_cd(to_tsvector('simple', immutable_unaccent(m.body)),
+                          plainto_tsquery('simple', immutable_unaccent(:query))) as rank,
+               substring(m.body from 1 for 240) as snippet
+        from messages m
+        where m.conversation_id = :conversationId
+          and to_tsvector('simple', immutable_unaccent(m.body))
+              @@ plainto_tsquery('simple', immutable_unaccent(:query))
+          and (
+            ts_rank_cd(to_tsvector('simple', immutable_unaccent(m.body)),
+                       plainto_tsquery('simple', immutable_unaccent(:query))) < :rank
+            or (
+              ts_rank_cd(to_tsvector('simple', immutable_unaccent(m.body)),
+                         plainto_tsquery('simple', immutable_unaccent(:query))) = :rank
+              and (m.created_at < :createdAt
+                   or (m.created_at = :createdAt and m.id < :id))
+            )
+          )
+        order by rank desc, m.created_at desc, m.id desc
+        """, nativeQuery = true)
+    List<SearchRow> searchBefore(@Param("conversationId") Integer conversationId,
+                                 @Param("query") String query,
+                                 @Param("rank") double rank,
+                                 @Param("createdAt") Instant createdAt,
+                                 @Param("id") Long id,
+                                 Pageable pageable);
 }

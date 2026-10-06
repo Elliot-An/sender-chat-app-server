@@ -70,6 +70,59 @@ public class MessageService {
         return new Page(values.stream().map(message -> MessageResponse.from(message, conversationMembers)).toList(), next, more);
     }
 
+    @Transactional(readOnly = true)
+    public SearchPage search(Integer userId, Integer conversationId, String query, String cursor, int limit) {
+        authorizedConversation(userId, conversationId);
+        String normalized = query == null ? "" : query.trim();
+        if (normalized.length() < 2 || normalized.length() > 200) {
+            throw error(HttpStatus.BAD_REQUEST, "Search query must contain 2 to 200 characters");
+        }
+        int size = Math.clamp(limit, 1, 50);
+        List<MessageRepository.SearchRow> rows = cursor == null || cursor.isBlank()
+                ? messages.search(conversationId, normalized, PageRequest.of(0, size + 1))
+                : searchBefore(conversationId, normalized, cursor, size);
+        boolean more = rows.size() > size;
+        if (more) rows = rows.subList(0, size);
+        List<ConversationMember> conversationMembers = members.findByConversationId(conversationId);
+        Map<Long, Message> byId = new HashMap<>();
+        messages.findAllById(rows.stream().map(MessageRepository.SearchRow::getId).toList())
+                .forEach(message -> byId.put(message.getId(), message));
+        String next = more ? encodeSearchCursor(rows.getLast(), normalized) : null;
+        List<SearchResponse> results = rows.stream()
+                .map(row -> new SearchResponse(MessageResponse.from(byId.get(row.getId()), conversationMembers),
+                        row.getRank(), row.getSnippet()))
+                .toList();
+        return new SearchPage(results, next, more);
+    }
+
+    private List<MessageRepository.SearchRow> searchBefore(Integer conversationId, String query,
+                                                            String cursor, int size) {
+        SearchCursor decoded = decodeSearchCursor(cursor);
+        if (!decoded.query().equals(query)) {
+            throw error(HttpStatus.BAD_REQUEST, "Search cursor does not match the query");
+        }
+        return messages.searchBefore(conversationId, query, decoded.rank(), decoded.createdAt(),
+                decoded.id(), PageRequest.of(0, size + 1));
+    }
+
+    private String encodeSearchCursor(MessageRepository.SearchRow row, String query) {
+        String encodedQuery = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(query.getBytes(StandardCharsets.UTF_8));
+        String value = encodedQuery + "|" + row.getRank() + "|" + row.getCreatedAt() + "|" + row.getId();
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private SearchCursor decodeSearchCursor(String cursor) {
+        try {
+            String value = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
+            String[] parts = value.split("\\|", 4);
+            String query = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.UTF_8);
+            return new SearchCursor(query, Double.parseDouble(parts[1]), Instant.parse(parts[2]), Long.parseLong(parts[3]));
+        } catch (RuntimeException exception) {
+            throw error(HttpStatus.BAD_REQUEST, "Invalid search cursor");
+        }
+    }
+
     private Conversation authorizedConversation(Integer userId, Integer conversationId) {
         if (!members.existsByConversationIdAndUserId(conversationId, userId)) {
             if (!conversations.existsById(conversationId)) throw error(HttpStatus.NOT_FOUND, "Conversation not found");
@@ -112,4 +165,5 @@ public class MessageService {
     }
 
     private record Cursor(Instant createdAt, Long id) {}
+    private record SearchCursor(String query, double rank, Instant createdAt, Long id) {}
 }
