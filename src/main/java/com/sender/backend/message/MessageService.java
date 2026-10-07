@@ -153,6 +153,38 @@ public class MessageService {
     }
 
     @Transactional(readOnly = true)
+    public AttachmentPage listAttachments(Integer userId, Integer conversationId, String kind,
+                                          String cursor, int limit) {
+        authorizedConversation(userId, conversationId);
+        String normalizedKind = normalizeAttachmentKind(kind);
+        int size = Math.clamp(limit, 1, 100);
+        List<MessageRepository.AttachmentListRow> rows;
+        if (cursor == null || cursor.isBlank()) {
+            rows = messages.listAttachments(conversationId, normalizedKind, PageRequest.of(0, size + 1));
+        } else {
+            AttachmentCursor decoded = decodeAttachmentCursor(cursor);
+            rows = messages.listAttachmentsBefore(conversationId, normalizedKind, decoded.createdAt(),
+                    decoded.messageId(), decoded.sortOrder(), PageRequest.of(0, size + 1));
+        }
+        boolean more = rows.size() > size;
+        if (more) {
+            rows = rows.subList(0, size);
+        }
+        String next = more ? encodeAttachmentCursor(rows.getLast()) : null;
+        List<ConversationAttachmentResponse> items = rows.stream()
+                .map(row -> new ConversationAttachmentResponse(
+                        row.getId(),
+                        row.getMessageId(),
+                        row.getOriginalFilename(),
+                        row.getContentType(),
+                        row.getSizeBytes(),
+                        row.getSortOrder(),
+                        row.getCreatedAt()))
+                .toList();
+        return new AttachmentPage(items, next, more);
+    }
+
+    @Transactional(readOnly = true)
     public SearchPage search(Integer userId, Integer conversationId, String query, String cursor, int limit) {
         authorizedConversation(userId, conversationId);
         String normalized = query == null ? "" : query.trim();
@@ -251,6 +283,14 @@ public class MessageService {
         return raw.split(";")[0].trim().toLowerCase(Locale.ROOT);
     }
 
+    private String normalizeAttachmentKind(String raw) {
+        String kind = raw == null || raw.isBlank() ? "all" : raw.trim().toLowerCase(Locale.ROOT);
+        if (!kind.equals("all") && !kind.equals("media") && !kind.equals("files")) {
+            throw error(HttpStatus.BAD_REQUEST, "Attachment kind must be all, media, or files");
+        }
+        return kind;
+    }
+
     private List<MessageRepository.SearchRow> searchBefore(Integer conversationId, String query,
                                                             String cursor, int size) {
         SearchCursor decoded = decodeSearchCursor(cursor);
@@ -316,10 +356,26 @@ public class MessageService {
         }
     }
 
+    private String encodeAttachmentCursor(MessageRepository.AttachmentListRow row) {
+        String value = row.getCreatedAt() + "|" + row.getMessageId() + "|" + row.getSortOrder();
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private AttachmentCursor decodeAttachmentCursor(String cursor) {
+        try {
+            String value = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
+            String[] parts = value.split("\\|", 3);
+            return new AttachmentCursor(Instant.parse(parts[0]), Long.parseLong(parts[1]), Integer.parseInt(parts[2]));
+        } catch (RuntimeException exception) {
+            throw error(HttpStatus.BAD_REQUEST, "Invalid attachment cursor");
+        }
+    }
+
     private ResponseStatusException error(HttpStatus status, String message) {
         return new ResponseStatusException(status, message);
     }
 
     private record Cursor(Instant createdAt, Long id) {}
     private record SearchCursor(String query, double rank, Instant createdAt, Long id) {}
+    private record AttachmentCursor(Instant createdAt, Long messageId, int sortOrder) {}
 }
