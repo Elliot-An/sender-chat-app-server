@@ -1,5 +1,7 @@
 package com.sender.backend.message;
 
+import com.sender.backend.common.ratelimit.RateLimitPolicy;
+import com.sender.backend.common.ratelimit.RateLimited;
 import com.sender.backend.message.MessageDtos.*;
 import jakarta.validation.Valid;
 import io.swagger.v3.oas.annotations.*;
@@ -33,20 +35,24 @@ public class MessageController {
     }
 
     @PostMapping
+    @RateLimited(RateLimitPolicy.MESSAGE_SEND)
     @Operation(summary = "Send a text message", description = "Retries with the same clientMessageId are idempotent.")
     @ApiResponse(responseCode = "201", description = "Message persisted")
     @ApiResponse(responseCode = "403", description = "Authenticated user is not a member")
     @ApiResponse(responseCode = "409", description = "Client message ID conflicts with a different body")
+    @ApiResponse(responseCode = "429", description = "Too many requests")
     public ResponseEntity<MessageResponse> send(@AuthenticationPrincipal Jwt jwt, @PathVariable Integer conversationId,
                                                 @Valid @RequestBody SendRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.send(userId(jwt), conversationId, request));
     }
 
     @GetMapping("/search")
+    @RateLimited(RateLimitPolicy.MESSAGE_SEARCH)
     @Operation(summary = "Search conversation messages", description = "Returns ranked, cursor-paginated messages scoped to the conversation.")
     @ApiResponse(responseCode = "200", description = "Search results returned")
     @ApiResponse(responseCode = "400", description = "Invalid query or cursor")
     @ApiResponse(responseCode = "403", description = "Authenticated user is not a member")
+    @ApiResponse(responseCode = "429", description = "Too many requests")
     public SearchPage search(@AuthenticationPrincipal Jwt jwt, @PathVariable Integer conversationId,
                                             @RequestParam String q,
                                             @RequestParam(required = false) String cursor,

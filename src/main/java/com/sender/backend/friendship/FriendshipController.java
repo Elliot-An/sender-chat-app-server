@@ -1,5 +1,7 @@
 package com.sender.backend.friendship;
 
+import com.sender.backend.common.ratelimit.RateLimitPolicy;
+import com.sender.backend.common.ratelimit.RateLimited;
 import jakarta.validation.Valid;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -42,22 +44,26 @@ public class FriendshipController {
     }
 
     @PostMapping
+    @RateLimited(RateLimitPolicy.FRIENDSHIP_WRITE)
     @Operation(summary = "Send a friendship request", description = "Creates a pending request for another user.")
     @ApiResponse(responseCode = "201", description = "Friendship request created")
     @ApiResponse(responseCode = "400", description = "Invalid user or self-request")
     @ApiResponse(responseCode = "409", description = "A friendship already exists")
     @ApiResponse(responseCode = "401", description = "Missing or invalid access token")
+    @ApiResponse(responseCode = "429", description = "Too many requests")
     public ResponseEntity<FriendshipResponse> request(@AuthenticationPrincipal Jwt jwt,
                                                        @Valid @RequestBody CreateRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.request(userId(jwt), request.userId()));
     }
 
     @PatchMapping("/{friendshipId}")
+    @RateLimited(RateLimitPolicy.FRIENDSHIP_WRITE)
     @Operation(summary = "Accept or decline a friendship request")
     @ApiResponse(responseCode = "200", description = "Friendship request updated")
     @ApiResponse(responseCode = "403", description = "The authenticated user cannot decide this request")
     @ApiResponse(responseCode = "404", description = "Friendship request not found")
     @ApiResponse(responseCode = "401", description = "Missing or invalid access token")
+    @ApiResponse(responseCode = "429", description = "Too many requests")
     public FriendshipResponse decide(
                                      @AuthenticationPrincipal Jwt jwt,
                                      @Parameter(description = "Friendship request identifier", example = "42")

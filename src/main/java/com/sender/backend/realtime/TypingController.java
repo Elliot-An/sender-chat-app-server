@@ -1,5 +1,7 @@
 package com.sender.backend.realtime;
 
+import com.sender.backend.common.ratelimit.RateLimitPolicy;
+import com.sender.backend.common.ratelimit.RateLimiter;
 import com.sender.backend.conversation.ConversationMember;
 import com.sender.backend.conversation.ConversationMemberRepository;
 import org.springframework.http.HttpStatus;
@@ -23,11 +25,14 @@ public class TypingController {
 
     private final ConversationMemberRepository members;
     private final RealtimePublisher realtime;
+    private final RateLimiter rateLimiter;
     private final Map<TypingKey, TypingState> states = new ConcurrentHashMap<>();
 
-    public TypingController(ConversationMemberRepository members, RealtimePublisher realtime) {
+    public TypingController(ConversationMemberRepository members, RealtimePublisher realtime,
+                            RateLimiter rateLimiter) {
         this.members = members;
         this.realtime = realtime;
+        this.rateLimiter = rateLimiter;
     }
 
     @MessageMapping("/conversations/{conversationId}/typing")
@@ -38,6 +43,10 @@ public class TypingController {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
         }
         Integer userId = parseUserId(principal);
+        // Typing is best-effort: excess signals are dropped silently instead of erroring the STOMP session.
+        if (!rateLimiter.allow(RateLimitPolicy.TYPING, "user:" + userId)) {
+            return;
+        }
         if (!members.existsByConversationIdAndUserId(conversationId, userId)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You are not a member of this conversation");
         }

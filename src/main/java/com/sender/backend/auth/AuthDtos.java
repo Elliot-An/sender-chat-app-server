@@ -22,9 +22,10 @@ public final class AuthDtos {
 			@NotBlank String currentPassword,
 			@NotBlank @Size(min = 8, max = 72) String newPassword) {}
 
-	public record PublicUser(Integer id, String username, String email, String displayName) {
+	public record PublicUser(Integer id, String username, String email, String displayName, String avatarUrl) {
 		public static PublicUser from(User user) {
-			return new PublicUser(user.getId(), user.getUsername(), user.getEmail(), user.getDisplayName());
+			return new PublicUser(user.getId(), user.getUsername(), user.getEmail(), user.getDisplayName(),
+					user.getAvatarUrl());
 		}
 	}
 

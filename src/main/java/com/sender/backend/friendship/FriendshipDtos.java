@@ -1,6 +1,5 @@
 package com.sender.backend.friendship;
 
-import com.sender.backend.auth.AuthDtos.PublicUser;
 import com.sender.backend.user.User;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.*;
@@ -9,9 +8,9 @@ import java.time.Instant;
 public final class FriendshipDtos {
     private FriendshipDtos() {}
 
-    public record UserSummary(Integer id, String username, String displayName) {
+    public record UserSummary(Integer id, String username, String displayName, String avatarUrl) {
         public static UserSummary from(User user) {
-            return new UserSummary(user.getId(), user.getUsername(), user.getDisplayName());
+            return new UserSummary(user.getId(), user.getUsername(), user.getDisplayName(), user.getAvatarUrl());
         }
     }
 

@@ -29,6 +29,9 @@ public class User {
 	@Column(nullable = false, length = 30)
 	private String displayName;
 
+	@Column(name = "avatar_url", length = 2048)
+	private String avatarUrl;
+
 	@Column(nullable = false)
 	private Instant createdAt;
 
