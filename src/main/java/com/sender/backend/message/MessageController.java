@@ -13,9 +13,11 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.UUID;
+
 @RestController
 @RequestMapping("/api/v1/conversations/{conversationId}/messages")
-@Tag(name = "Messages", description = "Persistent text messages")
+@Tag(name = "Messages", description = "Persistent messages and attachments")
 @SecurityRequirement(name = "bearerAuth")
 public class MessageController {
     private final MessageService service;
@@ -36,14 +38,30 @@ public class MessageController {
 
     @PostMapping
     @RateLimited(RateLimitPolicy.MESSAGE_SEND)
-    @Operation(summary = "Send a text message", description = "Retries with the same clientMessageId are idempotent.")
+    @Operation(summary = "Send a message", description = "Optional body and/or attachments. Retries with the same clientMessageId are idempotent.")
     @ApiResponse(responseCode = "201", description = "Message persisted")
+    @ApiResponse(responseCode = "400", description = "Invalid body or attachments")
     @ApiResponse(responseCode = "403", description = "Authenticated user is not a member")
-    @ApiResponse(responseCode = "409", description = "Client message ID conflicts with a different body")
+    @ApiResponse(responseCode = "409", description = "Client message ID conflicts with different content")
     @ApiResponse(responseCode = "429", description = "Too many requests")
     public ResponseEntity<MessageResponse> send(@AuthenticationPrincipal Jwt jwt, @PathVariable Integer conversationId,
                                                 @Valid @RequestBody SendRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.send(userId(jwt), conversationId, request));
+    }
+
+    @GetMapping("/{messageId}/attachments/{attachmentId}/download")
+    @RateLimited(RateLimitPolicy.ATTACHMENT_DOWNLOAD)
+    @Operation(summary = "Create attachment download URL",
+            description = "Returns a short-lived presigned GET URL after membership authorization.")
+    @ApiResponse(responseCode = "200", description = "Download URL returned")
+    @ApiResponse(responseCode = "403", description = "Authenticated user is not a member")
+    @ApiResponse(responseCode = "404", description = "Message or attachment not found")
+    @ApiResponse(responseCode = "429", description = "Too many requests")
+    public AttachmentDownloadResponse download(@AuthenticationPrincipal Jwt jwt,
+                                               @PathVariable Integer conversationId,
+                                               @PathVariable Long messageId,
+                                               @PathVariable UUID attachmentId) {
+        return service.createDownload(userId(jwt), conversationId, messageId, attachmentId);
     }
 
     @GetMapping("/search")

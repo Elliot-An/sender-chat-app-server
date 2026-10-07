@@ -30,6 +30,8 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
 
     List<Message> findByConversationIdOrderByCreatedAtDescIdDesc(Integer conversationId, Pageable pageable);
 
+    List<Message> findByConversationId(Integer conversationId);
+
     @Query("""
         select distinct m.sender.id from Message m
         where m.conversation.id = :conversationId and m.id <= :messageId

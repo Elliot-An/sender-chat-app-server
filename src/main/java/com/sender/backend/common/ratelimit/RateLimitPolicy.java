@@ -18,7 +18,10 @@ public enum RateLimitPolicy {
 	MESSAGE_SEND(Scope.USER),
 	MESSAGE_SEARCH(Scope.USER),
 	MESSAGE_PROGRESS(Scope.USER),
-	TYPING(Scope.USER);
+	ATTACHMENT_UPLOAD(Scope.USER),
+	ATTACHMENT_DOWNLOAD(Scope.USER),
+	TYPING(Scope.USER),
+	PRESENCE_HEARTBEAT(Scope.USER);
 
 	public enum Scope {
 		/** Authenticated user id, falling back to client address when unauthenticated. */

@@ -1,12 +1,15 @@
 package com.sender.backend.friendship;
 
+import com.sender.backend.presence.PresenceService;
 import com.sender.backend.user.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import com.sender.backend.realtime.RealtimePublisher;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static com.sender.backend.friendship.FriendshipDtos.*;
 
@@ -15,16 +18,32 @@ public class FriendshipService {
     private final FriendshipRepository friendships;
     private final UserRepository users;
     private final RealtimePublisher realtime;
+    private final PresenceService presence;
 
-    public FriendshipService(FriendshipRepository friendships, UserRepository users, RealtimePublisher realtime) {
+    public FriendshipService(FriendshipRepository friendships, UserRepository users, RealtimePublisher realtime,
+                             PresenceService presence) {
         this.friendships = friendships;
         this.users = users;
         this.realtime = realtime;
+        this.presence = presence;
     }
 
     @Transactional(readOnly = true)
     public List<FriendshipResponse> accepted(Integer userId) {
-        return friendships.findAcceptedForUser(userId, Friendship.Status.ACCEPTED).stream().map(FriendshipResponse::from).toList();
+        List<Friendship> accepted = friendships.findAcceptedForUser(userId, Friendship.Status.ACCEPTED);
+        Set<Integer> peerIds = new HashSet<>();
+        for (Friendship friendship : accepted) {
+            peerIds.add(friendship.getRequester().getId());
+            peerIds.add(friendship.getAddressee().getId());
+        }
+        peerIds.remove(userId);
+        Set<Integer> onlinePeers = presence.onlineAmong(peerIds);
+        return accepted.stream()
+                .map(friendship -> FriendshipResponse.from(
+                        friendship,
+                        onlinePeers.contains(friendship.getRequester().getId()),
+                        onlinePeers.contains(friendship.getAddressee().getId())))
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -60,13 +79,19 @@ public class FriendshipService {
         }
         if (decision == Decision.ACCEPT) friendship.accept();
         else friendship.decline();
-        FriendshipResponse response = FriendshipResponse.from(friendship);
+        FriendshipResponse response;
         if (decision == Decision.ACCEPT) {
+            response = FriendshipResponse.from(
+                    friendship,
+                    presence.isOnline(friendship.getRequester().getId()),
+                    presence.isOnline(friendship.getAddressee().getId()));
             realtime.publishAfterCommit(
                     friendship.getRequester().getId(),
                     "FRIENDSHIP_UPDATED",
                     new FriendshipUpdatedPayload(response)
             );
+        } else {
+            response = FriendshipResponse.from(friendship);
         }
         return response;
     }

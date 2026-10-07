@@ -13,6 +13,14 @@ public interface FriendshipRepository extends JpaRepository<Friendship, Integer>
         """)
     List<Friendship> findAcceptedForUser(@Param("userId") Integer userId, @Param("status") Friendship.Status status);
 
+    @Query("""
+        select case when f.requester.id = :userId then f.addressee.id else f.requester.id end
+        from Friendship f
+        where (f.requester.id = :userId or f.addressee.id = :userId)
+          and f.status = :status
+        """)
+    List<Integer> findFriendIds(@Param("userId") Integer userId, @Param("status") Friendship.Status status);
+
     List<Friendship> findByAddresseeIdAndStatusOrderByCreatedAtDesc(Integer userId, Friendship.Status status);
 
     @Query("""

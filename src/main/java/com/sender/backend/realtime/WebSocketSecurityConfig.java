@@ -65,7 +65,7 @@ public class WebSocketSecurityConfig implements WebSocketMessageBrokerConfigurer
                 if (principal == null || destination == null) {
                     throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated subscription required");
                 }
-                if (destination.equals("/user/queue/events") || destination.equals("/user/queue/presence")) {
+                if (destination.equals("/user/queue/events")) {
                     return;
                 }
                 if (!destination.startsWith("/topic/conversations/")) {

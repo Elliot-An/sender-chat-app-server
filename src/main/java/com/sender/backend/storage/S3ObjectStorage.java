@@ -11,12 +11,16 @@ import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
 
 import java.net.URISyntaxException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 
 @Component
@@ -35,11 +39,13 @@ public class S3ObjectStorage implements ObjectStorage {
 
 	@Override
 	public PresignedUpload presignPut(String objectKey, String contentType, long contentLength, Duration ttl) {
+		// Sign Content-Type only. Do not put contentLength on the PutObjectRequest: AWS then
+		// requires a signed Content-Length header, which is a common source of browser PUT 403s.
+		// Callers still enforce size before issuing the URL; commit paths re-check via HeadObject.
 		PutObjectRequest put = PutObjectRequest.builder()
 				.bucket(bucket)
 				.key(objectKey)
 				.contentType(contentType)
-				.contentLength(contentLength)
 				.build();
 		PresignedPutObjectRequest presigned = presigner.presignPutObject(PutObjectPresignRequest.builder()
 				.signatureDuration(ttl)
@@ -49,6 +55,23 @@ public class S3ObjectStorage implements ObjectStorage {
 			return new PresignedUpload(presigned.url().toURI(), presigned.expiration());
 		} catch (URISyntaxException exception) {
 			throw new IllegalStateException("Presigned upload URL was not valid", exception);
+		}
+	}
+
+	@Override
+	public PresignedDownload presignGet(String objectKey, Duration ttl) {
+		GetObjectRequest get = GetObjectRequest.builder()
+				.bucket(bucket)
+				.key(objectKey)
+				.build();
+		PresignedGetObjectRequest presigned = presigner.presignGetObject(GetObjectPresignRequest.builder()
+				.signatureDuration(ttl)
+				.getObjectRequest(get)
+				.build());
+		try {
+			return new PresignedDownload(presigned.url().toURI(), Instant.now().plus(ttl));
+		} catch (URISyntaxException exception) {
+			throw new IllegalStateException("Presigned download URL was not valid", exception);
 		}
 	}
 

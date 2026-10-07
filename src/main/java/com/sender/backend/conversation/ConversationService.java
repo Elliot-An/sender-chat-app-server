@@ -5,8 +5,11 @@ import com.sender.backend.friendship.Friendship;
 import com.sender.backend.friendship.FriendshipRepository;
 import com.sender.backend.user.*;
 import com.sender.backend.conversation.ConversationDtos.*;
+import com.sender.backend.message.Message;
+import com.sender.backend.message.MessageAttachment;
 import com.sender.backend.message.MessageRepository;
 import com.sender.backend.message.MessageProgressService;
+import com.sender.backend.presence.PresenceService;
 import com.sender.backend.realtime.RealtimePublisher;
 import com.sender.backend.storage.ObjectPublicUrl;
 import com.sender.backend.storage.ObjectStorage;
@@ -42,6 +45,7 @@ public class ConversationService {
     private final FriendshipRepository friendships;
     private final UserRepository users;
     private final MessageProgressService progress;
+    private final PresenceService presence;
     private final RealtimePublisher realtime;
     private final ObjectStorage storage;
     private final ObjectPublicUrl publicUrls;
@@ -50,8 +54,8 @@ public class ConversationService {
 
     public ConversationService(ConversationRepository conversations, ConversationMemberRepository members,
                                MessageRepository messages, FriendshipRepository friendships, UserRepository users,
-                               MessageProgressService progress, RealtimePublisher realtime, ObjectStorage storage,
-                               ObjectPublicUrl publicUrls,
+                               MessageProgressService progress, PresenceService presence, RealtimePublisher realtime,
+                               ObjectStorage storage, ObjectPublicUrl publicUrls,
                                @Value("${app.s3.presign-seconds:300}") long presignSeconds,
                                @Value("${app.avatar.max-bytes:2097152}") long maxBytes) {
         this.conversations = conversations;
@@ -60,6 +64,7 @@ public class ConversationService {
         this.friendships = friendships;
         this.users = users;
         this.progress = progress;
+        this.presence = presence;
         this.realtime = realtime;
         this.storage = storage;
         this.publicUrls = publicUrls;
@@ -225,6 +230,11 @@ public class ConversationService {
         List<ConversationMember> current = members.findByConversationId(conversationId);
         List<Integer> recipientIds = current.stream().map(member -> member.getUser().getId()).toList();
         String avatarKey = publicUrls.objectKeyFrom(conversation.getAvatarUrl());
+        List<String> attachmentKeys = messages.findByConversationId(conversationId).stream()
+                .map(Message::getAttachments)
+                .flatMap(List::stream)
+                .map(MessageAttachment::objectKey)
+                .toList();
         members.deleteAll(current);
         conversations.delete(conversation);
         ConversationUpdatedPayload payload = new ConversationUpdatedPayload(
@@ -233,6 +243,7 @@ public class ConversationService {
         if (avatarKey != null) {
             deleteAfterCommit(avatarKey);
         }
+        attachmentKeys.forEach(this::deleteAfterCommit);
     }
 
     private void publishActive(Integer conversationId, ConversationResponse body) {
@@ -249,16 +260,21 @@ public class ConversationService {
 
     private Summary summary(Conversation conversation, Integer userId) {
         PublicUser other = null;
+        boolean online = false;
         if (conversation.getType() == Conversation.Type.DIRECT) {
             other = members.findByConversationId(conversation.getId()).stream()
                     .map(ConversationMember::getUser)
                     .filter(user -> !user.getId().equals(userId))
                     .findFirst().map(PublicUser::from).orElse(null);
+            if (other != null && areFriends(userId, other.id())) {
+                online = presence.isOnline(other.id());
+            }
         }
         String avatarUrl = conversation.getType() == Conversation.Type.GROUP ? conversation.getAvatarUrl() : null;
         return new Summary(conversation.getId(), conversation.getType(), conversation.getName(), avatarUrl, other,
                 messages.findTopByConversationIdOrderByCreatedAtDescIdDesc(conversation.getId()).map(LatestMessage::from).orElse(null),
-                Math.toIntExact(progress.unreadCount(userId, conversation.getId())), conversation.getUpdatedAt());
+                Math.toIntExact(progress.unreadCount(userId, conversation.getId())), conversation.getUpdatedAt(),
+                online);
     }
 
     private ConversationResponse response(Conversation conversation) {
@@ -293,9 +309,14 @@ public class ConversationService {
     }
 
     private void requireFriends(Integer first, Integer second) {
-        boolean accepted = friendships.findBetween(first, second).stream()
+        if (!areFriends(first, second)) {
+            throw error(HttpStatus.FORBIDDEN, "Only accepted friends can be in conversations");
+        }
+    }
+
+    private boolean areFriends(Integer first, Integer second) {
+        return friendships.findBetween(first, second).stream()
                 .anyMatch(friendship -> friendship.getStatus() == Friendship.Status.ACCEPTED);
-        if (!accepted) throw error(HttpStatus.FORBIDDEN, "Only accepted friends can be in conversations");
     }
 
     private String normalizeGroupName(String raw) {

@@ -4,6 +4,7 @@ import com.sender.backend.conversation.ConversationDtos.*;
 import com.sender.backend.friendship.FriendshipRepository;
 import com.sender.backend.message.MessageProgressService;
 import com.sender.backend.message.MessageRepository;
+import com.sender.backend.presence.PresenceService;
 import com.sender.backend.realtime.RealtimePublisher;
 import com.sender.backend.storage.ObjectPublicUrl;
 import com.sender.backend.storage.ObjectStorage;
@@ -36,6 +37,7 @@ class ConversationServiceTest {
 	@Mock FriendshipRepository friendships;
 	@Mock UserRepository users;
 	@Mock MessageProgressService progress;
+	@Mock PresenceService presence;
 	@Mock RealtimePublisher realtime;
 	@Mock ObjectStorage storage;
 
@@ -44,7 +46,7 @@ class ConversationServiceTest {
 	@BeforeEach
 	void setUp() {
 		service = new ConversationService(
-				conversations, members, messages, friendships, users, progress,
+				conversations, members, messages, friendships, users, progress, presence,
 				realtime, storage, new ObjectPublicUrl("https://cdn.example.com"),
 				300, 2 * 1024 * 1024);
 	}

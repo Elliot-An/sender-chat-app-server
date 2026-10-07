@@ -8,17 +8,27 @@ import java.time.Instant;
 public final class FriendshipDtos {
     private FriendshipDtos() {}
 
-    public record UserSummary(Integer id, String username, String displayName, String avatarUrl) {
+    public record UserSummary(Integer id, String username, String displayName, String avatarUrl, boolean online) {
         public static UserSummary from(User user) {
-            return new UserSummary(user.getId(), user.getUsername(), user.getDisplayName(), user.getAvatarUrl());
+            return from(user, false);
+        }
+
+        public static UserSummary from(User user, boolean online) {
+            return new UserSummary(user.getId(), user.getUsername(), user.getDisplayName(), user.getAvatarUrl(), online);
         }
     }
 
     public record FriendshipResponse(Integer id, UserSummary requester, UserSummary addressee,
                                      Friendship.Status status, Instant createdAt) {
         public static FriendshipResponse from(Friendship friendship) {
-            return new FriendshipResponse(friendship.getId(), UserSummary.from(friendship.getRequester()),
-                    UserSummary.from(friendship.getAddressee()), friendship.getStatus(), friendship.getCreatedAt());
+            return from(friendship, false, false);
+        }
+
+        public static FriendshipResponse from(Friendship friendship, boolean requesterOnline, boolean addresseeOnline) {
+            return new FriendshipResponse(friendship.getId(),
+                    UserSummary.from(friendship.getRequester(), requesterOnline),
+                    UserSummary.from(friendship.getAddressee(), addresseeOnline),
+                    friendship.getStatus(), friendship.getCreatedAt());
         }
     }
 
