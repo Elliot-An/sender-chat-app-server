@@ -22,6 +22,9 @@ public class Conversation {
     @Column(length = 100)
     private String name;
 
+    @Column(name = "avatar_url", length = 2048)
+    private String avatarUrl;
+
     @Column(name = "direct_key", length = 64, unique = true)
     private String directKey;
 
@@ -45,6 +48,14 @@ public class Conversation {
 
     public static Conversation group(String name) {
         return new Conversation(Type.GROUP, name, null);
+    }
+
+    public void rename(String name) {
+        this.name = name;
+    }
+
+    public void setAvatarUrl(String avatarUrl) {
+        this.avatarUrl = avatarUrl;
     }
 
     public void touch(Instant at) {

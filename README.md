@@ -12,17 +12,38 @@ migration. Schema changes must be added as a new migration, for example
 
 ```bash
 cp .env.example .env
+# Fill S3_* with your AWS bucket, region, IAM keys, and public/CDN base URL
 docker compose up -d postgres
-set -a
-source .env
-set +a
 ./mvnw spring-boot:run
 ```
 
-Spring Boot does not load `.env` automatically, so the `source` step exports
-the values into the application process. The application connects to
-`localhost:5432/sender` by default. Override the connection with
-`DATABASE_URL`, `DATABASE_USERNAME`, and `DATABASE_PASSWORD`.
+Spring Boot imports `backend/.env` automatically (see `spring.config.import` in
+`application.properties`). You can still `set -a && source .env && set +a` to
+export the same values into the shell before other tools.
+
+Create the AWS S3 bucket in the console and configure public-read for public
+prefixes plus browser CORS for `FRONTEND_URL` before running the app. Features
+share the bucket via key prefixes (e.g. `avatars/*`, `group-avatars/*`). Set `S3_PUBLIC_BASE_URL`
+to the bucket URL or CloudFront base.
+
+### Rate limiting
+
+All rate limits share `common/ratelimit`. Endpoints opt in with
+`@RateLimited(RateLimitPolicy.X)`; exceeding the limit returns `429` with a
+`Retry-After` header. Typing events over WebSocket are dropped silently.
+The window is `RATE_LIMIT_WINDOW` (default `1m`) and the maximum hits per
+window for each policy is `RATE_LIMIT_<POLICY>_MAX_HITS` in `.env`
+(see `.env.example`). Auth endpoints are keyed by client IP; all others by the
+authenticated user. Counters are in memory and reset on restart. Behind a
+reverse proxy, configure `server.forward-headers-strategy` so the real client
+IP is used.
+
+Object storage is AWS S3 (optional CloudFront). The bucket must allow browser
+PUT from `FRONTEND_URL` and public or CDN reads for public prefixes such as
+`avatars/*` and `group-avatars/*`. Avatar size limit is `AVATAR_MAX_BYTES` (default 2MB).
+
+The application connects to `localhost:5432/sender` by default. Override the
+connection with `DATABASE_URL`, `DATABASE_USERNAME`, and `DATABASE_PASSWORD`.
 Flyway creates and records the schema in its `flyway_schema_history` table
 automatically during application startup.
 

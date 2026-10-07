@@ -55,6 +55,30 @@ public class ConversationController {
         return service.get(userId(jwt), conversationId);
     }
 
+    @PatchMapping("/{conversationId}")
+    @Operation(summary = "Update group name and/or avatar")
+    @ApiResponse(responseCode = "200", description = "Group updated")
+    @ApiResponse(responseCode = "400", description = "Invalid name, avatar key, or not a group")
+    @ApiResponse(responseCode = "403", description = "Authenticated user is not a member")
+    public ConversationResponse update(@AuthenticationPrincipal Jwt jwt, @PathVariable Integer conversationId,
+                                       @Valid @RequestBody UpdateGroupRequest request) {
+        return service.updateGroup(userId(jwt), conversationId, request);
+    }
+
+    @PostMapping("/{conversationId}/avatar-uploads")
+    @Operation(summary = "Create group avatar upload URL",
+            description = "Returns a short-lived presigned PUT URL for a group avatar. The client uploads bytes, then commits the object key via PATCH.")
+    @ApiResponse(responseCode = "200", description = "Upload URL created")
+    @ApiResponse(responseCode = "400", description = "Unsupported image type, missing size, or not a group")
+    @ApiResponse(responseCode = "403", description = "Authenticated user is not a member")
+    @ApiResponse(responseCode = "413", description = "Image exceeds the 2MB limit")
+    public AvatarUploadResponse createAvatarUpload(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable Integer conversationId,
+            @Valid @RequestBody AvatarUploadRequest request) {
+        return service.createGroupAvatarUpload(userId(jwt), conversationId, request);
+    }
+
     @PostMapping("/{conversationId}/members")
     @Operation(summary = "Add a friend to a group")
     @ApiResponse(responseCode = "200", description = "Member added")
@@ -65,12 +89,17 @@ public class ConversationController {
     }
 
     @DeleteMapping("/{conversationId}/members/{memberId}")
-    @Operation(summary = "Remove a group member or leave the group")
-    @ApiResponse(responseCode = "200", description = "Member removed")
+    @Operation(summary = "Remove a group member or leave the group",
+            description = "Leaving as the last member dissolves the group. Returns 204 when the caller leaves or the group is dissolved.")
+    @ApiResponse(responseCode = "200", description = "Member removed; updated conversation returned")
+    @ApiResponse(responseCode = "204", description = "Caller left or group dissolved")
     @ApiResponse(responseCode = "403", description = "Authenticated user is not a member")
-    public ConversationResponse remove(@AuthenticationPrincipal Jwt jwt, @PathVariable Integer conversationId,
-                                       @PathVariable Integer memberId) {
-        return service.removeMember(userId(jwt), conversationId, memberId);
+    public ResponseEntity<ConversationResponse> remove(@AuthenticationPrincipal Jwt jwt,
+                                                       @PathVariable Integer conversationId,
+                                                       @PathVariable Integer memberId) {
+        return service.removeMember(userId(jwt), conversationId, memberId)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.noContent().build());
     }
 
     private Integer userId(Jwt jwt) {

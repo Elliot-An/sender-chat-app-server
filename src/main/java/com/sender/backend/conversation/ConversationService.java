@@ -7,33 +7,64 @@ import com.sender.backend.user.*;
 import com.sender.backend.conversation.ConversationDtos.*;
 import com.sender.backend.message.MessageRepository;
 import com.sender.backend.message.MessageProgressService;
+import com.sender.backend.realtime.RealtimePublisher;
+import com.sender.backend.storage.ObjectPublicUrl;
+import com.sender.backend.storage.ObjectStorage;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
 @Service
 public class ConversationService {
+    private static final Set<String> ALLOWED_TYPES = Set.of("image/jpeg", "image/png", "image/webp");
+    private static final Map<String, String> EXTENSIONS = Map.of(
+            "image/jpeg", "jpg",
+            "image/png", "png",
+            "image/webp", "webp");
+    private static final Pattern CONTROL = Pattern.compile("\\p{Cntrl}");
+    private static final Pattern GROUP_AVATAR_KEY = Pattern.compile(
+            "^group-avatars/(\\d+)/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\.(jpg|jpeg|png|webp)$");
+
     private final ConversationRepository conversations;
     private final ConversationMemberRepository members;
     private final MessageRepository messages;
     private final FriendshipRepository friendships;
     private final UserRepository users;
     private final MessageProgressService progress;
+    private final RealtimePublisher realtime;
+    private final ObjectStorage storage;
+    private final ObjectPublicUrl publicUrls;
+    private final Duration presignTtl;
+    private final long maxBytes;
 
     public ConversationService(ConversationRepository conversations, ConversationMemberRepository members,
                                MessageRepository messages, FriendshipRepository friendships, UserRepository users,
-                               MessageProgressService progress) {
+                               MessageProgressService progress, RealtimePublisher realtime, ObjectStorage storage,
+                               ObjectPublicUrl publicUrls,
+                               @Value("${app.s3.presign-seconds:300}") long presignSeconds,
+                               @Value("${app.avatar.max-bytes:2097152}") long maxBytes) {
         this.conversations = conversations;
         this.members = members;
         this.messages = messages;
         this.friendships = friendships;
         this.users = users;
         this.progress = progress;
+        this.realtime = realtime;
+        this.storage = storage;
+        this.publicUrls = publicUrls;
+        this.presignTtl = Duration.ofSeconds(presignSeconds);
+        this.maxBytes = maxBytes;
     }
 
     @Transactional
@@ -97,6 +128,63 @@ public class ConversationService {
     }
 
     @Transactional
+    public ConversationResponse updateGroup(Integer userId, Integer conversationId, UpdateGroupRequest request) {
+        boolean hasName = request.name() != null;
+        boolean hasAvatar = request.avatarObjectKey() != null && !request.avatarObjectKey().isBlank();
+        if (!hasName && !hasAvatar) {
+            throw error(HttpStatus.BAD_REQUEST, "Provide a group name and/or avatar object key");
+        }
+        Conversation conversation = lockedMemberConversation(userId, conversationId);
+        if (conversation.getType() != Conversation.Type.GROUP) {
+            throw error(HttpStatus.BAD_REQUEST, "Only group conversations can be updated");
+        }
+        if (hasName) {
+            conversation.rename(normalizeGroupName(request.name()));
+        }
+        String previousKey = null;
+        if (hasAvatar) {
+            String key = request.avatarObjectKey().trim();
+            assertGroupAvatarKey(conversationId, key);
+            ObjectStorage.StoredObject object = storage.head(key)
+                    .orElseThrow(() -> error(HttpStatus.BAD_REQUEST, "Avatar object was not found"));
+            String type = object.contentType() == null ? "" : object.contentType().split(";")[0].trim().toLowerCase(Locale.ROOT);
+            if (!ALLOWED_TYPES.contains(type)) {
+                throw error(HttpStatus.BAD_REQUEST, "Uploaded avatar has an unsupported type");
+            }
+            previousKey = publicUrls.objectKeyFrom(conversation.getAvatarUrl());
+            conversation.setAvatarUrl(publicUrls.of(key));
+        }
+        conversation.touch(Instant.now());
+        ConversationResponse body = response(conversation);
+        publishActive(conversation.getId(), body);
+        if (previousKey != null && !previousKey.equals(request.avatarObjectKey().trim())) {
+            deleteAfterCommit(previousKey);
+        }
+        return body;
+    }
+
+    public AvatarUploadResponse createGroupAvatarUpload(Integer userId, Integer conversationId, AvatarUploadRequest request) {
+        Conversation conversation = memberConversation(userId, conversationId);
+        if (conversation.getType() != Conversation.Type.GROUP) {
+            throw error(HttpStatus.BAD_REQUEST, "Only group conversations have avatars");
+        }
+        String contentType = request.contentType() == null ? "" : request.contentType().trim().toLowerCase(Locale.ROOT);
+        if (!ALLOWED_TYPES.contains(contentType)) {
+            throw error(HttpStatus.BAD_REQUEST, "Avatar must be a JPEG, PNG, or WebP image");
+        }
+        long length = request.contentLength() == null ? 0 : request.contentLength();
+        if (length < 1) {
+            throw error(HttpStatus.BAD_REQUEST, "Avatar file size is required");
+        }
+        if (length > maxBytes) {
+            throw error(HttpStatus.PAYLOAD_TOO_LARGE, "Avatar must be 2MB or smaller");
+        }
+        String key = "group-avatars/" + conversationId + "/" + UUID.randomUUID() + "." + EXTENSIONS.get(contentType);
+        ObjectStorage.PresignedUpload upload = storage.presignPut(key, contentType, length, presignTtl);
+        return new AvatarUploadResponse(upload.putUrl().toString(), key, publicUrls.of(key), upload.expiresAt());
+    }
+
+    @Transactional
     public ConversationResponse addMember(Integer userId, Integer conversationId, MemberRequest request) {
         Conversation conversation = lockedMemberConversation(userId, conversationId);
         if (conversation.getType() != Conversation.Type.GROUP) throw error(HttpStatus.BAD_REQUEST, "Direct conversations have no group members");
@@ -107,22 +195,56 @@ public class ConversationService {
         }
         addMember(conversation, user(request.userId()));
         conversation.touch(Instant.now());
-        return response(conversation);
+        ConversationResponse body = response(conversation);
+        publishActive(conversationId, body);
+        return body;
     }
 
     @Transactional
-    public ConversationResponse removeMember(Integer userId, Integer conversationId, Integer targetUserId) {
+    public Optional<ConversationResponse> removeMember(Integer userId, Integer conversationId, Integer targetUserId) {
         Conversation conversation = lockedMemberConversation(userId, conversationId);
         if (conversation.getType() != Conversation.Type.GROUP) throw error(HttpStatus.BAD_REQUEST, "Direct conversations have no group members");
         if (!members.existsByConversationIdAndUserId(conversationId, targetUserId)) {
             throw error(HttpStatus.NOT_FOUND, "Conversation member not found");
         }
-        if (members.countByConversationId(conversationId) <= 1) {
-            throw error(HttpStatus.CONFLICT, "A group cannot be empty");
+        long count = members.countByConversationId(conversationId);
+        if (count <= 1) {
+            dissolve(conversation);
+            return Optional.empty();
         }
         members.deleteById(new ConversationMember.Id(conversationId, targetUserId));
         conversation.touch(Instant.now());
-        return response(conversation);
+        ConversationResponse body = response(conversation);
+        publishRemoved(conversationId, targetUserId);
+        publishActive(conversationId, body);
+        return userId.equals(targetUserId) ? Optional.empty() : Optional.of(body);
+    }
+
+    private void dissolve(Conversation conversation) {
+        Integer conversationId = conversation.getId();
+        List<ConversationMember> current = members.findByConversationId(conversationId);
+        List<Integer> recipientIds = current.stream().map(member -> member.getUser().getId()).toList();
+        String avatarKey = publicUrls.objectKeyFrom(conversation.getAvatarUrl());
+        members.deleteAll(current);
+        conversations.delete(conversation);
+        ConversationUpdatedPayload payload = new ConversationUpdatedPayload(
+                conversationId, ConversationUpdatedPayload.Membership.DISSOLVED, null);
+        recipientIds.forEach(id -> realtime.publishAfterCommit(id, "CONVERSATION_UPDATED", payload));
+        if (avatarKey != null) {
+            deleteAfterCommit(avatarKey);
+        }
+    }
+
+    private void publishActive(Integer conversationId, ConversationResponse body) {
+        ConversationUpdatedPayload payload = new ConversationUpdatedPayload(
+                conversationId, ConversationUpdatedPayload.Membership.ACTIVE, body);
+        body.members().forEach(member ->
+                realtime.publishAfterCommit(member.userId(), "CONVERSATION_UPDATED", payload));
+    }
+
+    private void publishRemoved(Integer conversationId, Integer userId) {
+        realtime.publishAfterCommit(userId, "CONVERSATION_UPDATED",
+                new ConversationUpdatedPayload(conversationId, ConversationUpdatedPayload.Membership.REMOVED, null));
     }
 
     private Summary summary(Conversation conversation, Integer userId) {
@@ -133,7 +255,8 @@ public class ConversationService {
                     .filter(user -> !user.getId().equals(userId))
                     .findFirst().map(PublicUser::from).orElse(null);
         }
-        return new Summary(conversation.getId(), conversation.getType(), conversation.getName(), other,
+        String avatarUrl = conversation.getType() == Conversation.Type.GROUP ? conversation.getAvatarUrl() : null;
+        return new Summary(conversation.getId(), conversation.getType(), conversation.getName(), avatarUrl, other,
                 messages.findTopByConversationIdOrderByCreatedAtDescIdDesc(conversation.getId()).map(LatestMessage::from).orElse(null),
                 Math.toIntExact(progress.unreadCount(userId, conversation.getId())), conversation.getUpdatedAt());
     }
@@ -173,6 +296,41 @@ public class ConversationService {
         boolean accepted = friendships.findBetween(first, second).stream()
                 .anyMatch(friendship -> friendship.getStatus() == Friendship.Status.ACCEPTED);
         if (!accepted) throw error(HttpStatus.FORBIDDEN, "Only accepted friends can be in conversations");
+    }
+
+    private String normalizeGroupName(String raw) {
+        String name = raw.trim();
+        if (name.isEmpty() || name.length() > 100 || CONTROL.matcher(name).find()) {
+            throw error(HttpStatus.BAD_REQUEST, "Group name must be 1 to 100 characters without control characters");
+        }
+        return name;
+    }
+
+    private void assertGroupAvatarKey(Integer conversationId, String key) {
+        var matcher = GROUP_AVATAR_KEY.matcher(key);
+        if (!matcher.matches() || !String.valueOf(conversationId).equals(matcher.group(1))) {
+            throw error(HttpStatus.BAD_REQUEST, "Avatar object key is invalid");
+        }
+    }
+
+    private void deleteAfterCommit(String objectKey) {
+        Runnable delete = () -> {
+            try {
+                storage.delete(objectKey);
+            } catch (RuntimeException ignored) {
+                // Best-effort cleanup; the new avatar URL is already durable.
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    delete.run();
+                }
+            });
+        } else {
+            delete.run();
+        }
     }
 
     private String directKey(Integer first, Integer second) {
